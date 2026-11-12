@@ -87,12 +87,38 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
 .note{font-size:.9rem; color:var(--muted); text-align:center}
 @media (max-width:22rem){.pair{grid-template-columns:1fr}}
 
+/* ---------- Practice calendar ---------- */
+.cal{padding:22px 18px 20px; display:flex; flex-direction:column; gap:14px}
+.cal[data-cal="moon"]{--accent:var(--moon); --accent-deep:var(--moon-deep)}
+.cal-top{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px}
+.cal-top h2{font-size:1.2rem; font-weight:600}
+.cal-nav{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.cal-nav p{font-family:var(--display); font-weight:600; font-size:1.05rem}
+.cal-nav .round{width:40px; height:40px}
+.cal-nav .round:disabled{opacity:.35; cursor:not-allowed}
+.cal-grid{display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px}
+.wd{text-align:center; font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); padding-bottom:2px}
+.day{aspect-ratio:1; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1;
+  font-weight:700; font-size:.95rem; font-variant-numeric:tabular-nums; background:var(--well);
+  box-shadow:inset 3px 3px 6px var(--in-dark), inset -2px -2px 5px var(--in-light)}
+.day svg{display:none; width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:3.4; stroke-linecap:round; stroke-linejoin:round}
+.day[aria-pressed="true"]{background:linear-gradient(145deg,var(--accent),var(--accent-deep)); color:var(--on-neon); font-size:.66rem;
+  box-shadow:4px 5px 10px var(--sh-dark), -3px -3px 8px var(--sh-light),
+    0 0 14px color-mix(in srgb,var(--accent) calc(var(--glow)*100%),transparent),
+    inset -2px -3px 5px rgba(0,60,0,.25), inset 2px 2px 5px rgba(255,255,255,.6)}
+.day[aria-pressed="true"] svg{display:block}
+.day.today{outline:2.5px solid var(--fg); outline-offset:2px}
+.day:disabled{background:transparent; box-shadow:none; color:var(--muted); opacity:.5; cursor:default}
+.day:active:not(:disabled){transform:scale(.92)}
+.cal-stats{font-weight:700; text-align:center}
+.cal-save{font-size:.82rem; color:var(--muted); text-align:center}
+
 /* ---------- Session ---------- */
 #session{display:flex; flex-direction:column; gap:22px}
 .bar{display:flex; align-items:center; gap:14px}
 .round{width:48px; height:48px; border-radius:50%; display:grid; place-items:center; flex:none}
 .round svg{width:22px; height:22px; fill:currentColor}
-.bar h1{font-size:1.4rem; font-weight:600}
+.bar h1{font-size:1.2rem; font-weight:600}
 .bar p{font-size:.85rem; color:var(--muted)}
 .bar > div{min-width:0; flex:1}
 .sound{display:flex; align-items:center; gap:8px; flex:none; padding:10px 16px 10px 12px}
@@ -233,6 +259,24 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
       </div>
     </div>
     <p class="note">Sound starts only when you press Begin, and you can switch it off at any time.</p>
+
+    <div class="cal clay" id="cal" data-cal="sun">
+      <div class="cal-top">
+        <h2>Practice calendar</h2>
+        <div class="seg" role="group" aria-label="Which salutation to show">
+          <button class="pill" type="button" id="cal-sun" aria-pressed="true">Sun</button>
+          <button class="pill" type="button" id="cal-moon" aria-pressed="false">Moon</button>
+        </div>
+      </div>
+      <div class="cal-nav">
+        <button class="round clay" type="button" id="cal-prev" aria-label="Previous month"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <p id="cal-month" aria-live="polite"></p>
+        <button class="round clay" type="button" id="cal-next" aria-label="Next month"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+      <p class="cal-stats" id="cal-stats"></p>
+      <p class="cal-save" id="cal-save">Finishing a session ticks today. Tap any past day to tick or untick it.</p>
+    </div>
   </section>
 
   <section id="session" hidden aria-labelledby="flow-title">
@@ -424,6 +468,101 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
   musicOn = load("ss-music","1") === "1";
   soundOn = load("ss-sound","1") === "1";
 
+  /* ---------- Practice log: one set of ticked days per salutation ---------- */
+  var log = {sun:{}, moon:{}}, store = null, storeReady = false, pendingOps = [], saving = {}, dirty = {};
+  var calFlow = "sun", calY, calM, saveNote = "";
+  var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  function pad(n){ return n < 10 ? "0" + n : "" + n; }
+  function dkey(d){ return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function cleanDays(o){ var r = {}; if(o && typeof o === "object") Object.keys(o).forEach(function(k){ if(/^\d{4}-\d{2}-\d{2}$/.test(k) && o[k]) r[k] = true; }); return r; }
+  (function(){ try{ var j = JSON.parse(load("ss-log","{}")); log.sun = cleanDays(j.sun); log.moon = cleanDays(j.moon); }catch(e){} })();
+  function saveLocal(){ save("ss-log", JSON.stringify(log)); }
+  function push(flowName){
+    if(!store) return;
+    if(saving[flowName]){ dirty[flowName] = true; return; }
+    saving[flowName] = true;
+    store.doc(flowName).set({days: log[flowName]}).then(function(){ note("Saved to your Claude account."); }, function(){
+      note("Could not save to your account just now. Your ticks are kept on this device.");
+    }).then(function(){
+      saving[flowName] = false;
+      if(dirty[flowName]){ dirty[flowName] = false; push(flowName); }
+    });
+  }
+  function note(t){ saveNote = t; var el = $("cal-save"); if(el) el.textContent = t; }
+  function setDay(flowName, key, val){
+    if(val) log[flowName][key] = true; else delete log[flowName][key];
+    saveLocal();
+    if(storeReady) push(flowName); else pendingOps.push([flowName, key, val]);
+    renderCal();
+  }
+  function streak(days){
+    var d = new Date(), n = 0;
+    if(!days[dkey(d)]) d.setDate(d.getDate() - 1);
+    while(days[dkey(d)]){ n++; d.setDate(d.getDate() - 1); }
+    return n;
+  }
+  function renderCal(){
+    var host = $("cal-grid"), now = new Date(), todayKey = dkey(now), days = log[calFlow];
+    $("cal").dataset.cal = calFlow;
+    $("cal-sun").setAttribute("aria-pressed", String(calFlow === "sun"));
+    $("cal-moon").setAttribute("aria-pressed", String(calFlow === "moon"));
+    $("cal-month").textContent = MONTHS[calM] + " " + calY;
+    $("cal-next").disabled = calY > now.getFullYear() || (calY === now.getFullYear() && calM >= now.getMonth());
+    host.textContent = "";
+    ["Su","Mo","Tu","We","Th","Fr","Sa"].forEach(function(w){ var e = document.createElement("span"); e.className = "wd"; e.textContent = w; host.appendChild(e); });
+    var first = new Date(calY, calM, 1).getDay(), len = new Date(calY, calM + 1, 0).getDate(), count = 0, i;
+    for(i = 0; i < first; i++) host.appendChild(document.createElement("span"));
+    var label = calFlow === "sun" ? "Sun Salutation" : "Moon Salutation";
+    for(i = 1; i <= len; i++){
+      (function(dn){
+        var key = calY + "-" + pad(calM + 1) + "-" + pad(dn), on = !!days[key];
+        if(on) count++;
+        var b = document.createElement("button"); b.type = "button"; b.className = "day" + (key === todayKey ? " today" : "");
+        b.id = "day-" + key;
+        b.setAttribute("aria-pressed", String(on));
+        b.setAttribute("aria-label", dn + " " + MONTHS[calM] + ", " + label + (on ? " done" : " not done"));
+        if(key > todayKey) b.disabled = true;
+        var sp = document.createElement("span"); sp.textContent = dn; b.appendChild(sp);
+        var sv = document.createElementNS("http://www.w3.org/2000/svg","svg"); sv.setAttribute("viewBox","0 0 24 24"); sv.setAttribute("aria-hidden","true");
+        var pa = document.createElementNS("http://www.w3.org/2000/svg","path"); pa.setAttribute("d","M5 12.5l4.5 4.5L19 7.5"); sv.appendChild(pa); b.appendChild(sv);
+        b.addEventListener("click", function(){ setDay(calFlow, key, !log[calFlow][key]); var again = $("day-" + key); if(again) again.focus(); });
+        host.appendChild(b);
+      })(i);
+    }
+    var st = streak(days);
+    $("cal-stats").textContent = count + (count === 1 ? " day" : " days") + " this month \u00b7 " + (st ? st + "-day streak" : "no streak yet");
+  }
+  (function(){ var n = new Date(); calY = n.getFullYear(); calM = n.getMonth(); })();
+  function connectStore(){
+    if(!window.claude || typeof window.claude.use !== "function"){ storeReady = false; return; }
+    var guard = new Promise(function(res){ setTimeout(function(){ res(null); }, 10000); });
+    Promise.all([window.claude.use("db"), window.claude.use("user")]).then(function(r){
+      var db = r[0], user = r[1];
+      if(!db || !user) return null;
+      return user.id().then(function(uid){
+        if(!uid) return null;
+        var col = db.collection("data/users/" + uid);
+        return Promise.race([Promise.all([col.doc("sun").get(), col.doc("moon").get()]), guard]).then(function(snaps){
+          if(!snaps) return null;
+          var toPush = [];
+          ["sun","moon"].forEach(function(k, i){
+            if(snaps[i].exists){ log[k] = cleanDays((snaps[i].data() || {}).days); }
+            else if(Object.keys(log[k]).length){ toPush.push(k); }
+          });
+          pendingOps.forEach(function(op){
+            if(op[2]) log[op[0]][op[1]] = true; else delete log[op[0]][op[1]];
+            if(toPush.indexOf(op[0]) < 0) toPush.push(op[0]);
+          });
+          pendingOps = []; store = col; storeReady = true;
+          saveLocal(); renderCal();
+          note("Saved to your Claude account.");
+          toPush.forEach(push);
+          return true;
+        });
+      });
+    }).catch(function(){ return null; });
+  }
+
   /* ---------- Voice ---------- */
   var synth = ("speechSynthesis" in window) ? window.speechSynthesis : null;
   function pickVoice(){
@@ -575,7 +714,7 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
       $("count").textContent = "Complete";
       $("pose").textContent = "Well done";
       $("sanskrit").textContent = flow.sub;
-      $("cue").textContent = "Stand quietly for a few breaths and notice how you feel.";
+      $("cue").textContent = "Today is ticked on your " + (flowKey === "sun" ? "Sun" : "Moon") + " calendar. Stand quietly for a few breaths and notice how you feel.";
     } else {
       orb.dataset.breath = playing ? s.breath : "rest";
       $("breath").textContent = playing ? BREATH[s.breath] : (started ? "Paused" : "Ready");
@@ -628,7 +767,9 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
     playing = false; halt(); stopMusic(false); awake(false); render();
   }
   function finish(){
-    halt(); playing = false; done = true; awake(false); render();
+    halt(); playing = false; done = true; awake(false);
+    setDay(flowKey, dkey(new Date()), true);
+    render();
     var my = token;
     say("Well done. Stand quietly for a few breaths. Namaste.", function(){
       if(my === token) stopMusic(false);
@@ -662,6 +803,7 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
     flow = null; flowKey = null;
     delete document.body.dataset.flow;
     $("session").hidden = true; $("home").hidden = false;
+    var n = new Date(); calY = n.getFullYear(); calM = n.getMonth(); renderCal();
     window.scrollTo(0, 0);
   }
   function route(){
@@ -681,7 +823,7 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
   $("prev").addEventListener("click", function(){ go(done ? flow.steps.length - 1 : idx - 1); });
   $("next").addEventListener("click", function(){
     if(done) return;
-    if(idx >= flow.steps.length - 1){ if(playing) finish(); else { done = true; render(); } }
+    if(idx >= flow.steps.length - 1){ if(playing) finish(); else { done = true; setDay(flowKey, dkey(new Date()), true); render(); } }
     else go(idx + 1);
   });
   $("sound").addEventListener("click", function(){
@@ -703,6 +845,11 @@ button{font:inherit; color:inherit; cursor:pointer; border:0; background:none; p
       pace = p; if(flowKey) save("ss-pace-" + flowKey, p); render();
     });
   });
+  $("cal-sun").addEventListener("click", function(){ calFlow = "sun"; renderCal(); });
+  $("cal-moon").addEventListener("click", function(){ calFlow = "moon"; renderCal(); });
+  $("cal-prev").addEventListener("click", function(){ calM--; if(calM < 0){ calM = 11; calY--; } renderCal(); });
+  $("cal-next").addEventListener("click", function(){ calM++; if(calM > 11){ calM = 0; calY++; } renderCal(); });
+  renderCal(); connectStore();
   window.addEventListener("hashchange", route);
   document.addEventListener("visibilitychange", function(){ if(!document.hidden && playing) awake(true); });
   if(synth){ try{ synth.getVoices(); }catch(e){} }
